@@ -32,17 +32,52 @@ test('sign-in proves derived grants for 30 minutes, and writes inside that time 
   assert.equal(f.state.requests.length, sent);
 });
 
-test('password sign-in of a local account bound to GitHub checks it again', async t => {
-  const f = await identityFixture(t), { h, admin } = f, password = testPassword();
+// Holds the permission check at its first installation read until release() is called.
+const holdCheck = state => {
+  let release, reached; const held = new Promise(resolve => { release = resolve; }), arrived = new Promise(resolve => { reached = resolve; });
+  state.apiGate = async path => { if (path === '/app/installations/77') { reached(); await held; } };
+  return { arrived, release: () => { state.apiGate = undefined; release(); } };
+};
+// What the console reads while it waits: the progress of the check, until it ends.
+const progress = async cookie => (await (await fetch(cookie.base + '/api/auth/me', { headers: { Cookie: cookie.value } })).json()).github_verification;
+const until = async (check, ms = 5_000) => { for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 25))) if (await check()) return; throw new Error('timed out'); };
+
+test('GitHub sign-in opens the session before the permission check ends, and the console can follow its progress', async t => {
+  const f = await identityFixture(t), { h, state } = f, hold = holdCheck(state);
+  const start = await fetch(h.admin + '/auth/github/start', { redirect: 'manual' }), browser = start.headers.get('set-cookie').split(';')[0];
+  const authorized = await fetch(start.headers.get('location'), { redirect: 'manual' });
+  const returned = fetch(authorized.headers.get('location'), { redirect: 'manual', headers: { Cookie: browser } });
+  await hold.arrived;
+  // The check waits at GitHub, yet the sign-in has answered with a session.
+  const callback = await returned; assert.equal(callback.status, 303);
+  assert.match(callback.headers.get('location'), /github_auth=1/);
+  const cookie = { base: h.admin, value: callback.headers.getSetCookie().find(c => c.startsWith('bot_session=')).split(';')[0] };
+  assert.deepEqual(await progress(cookie), { checked: 0, total: 1 });
+  const p = h.store.get("SELECT principal_id FROM external_identities WHERE provider='github'").principal_id;
+  assert.deepEqual(usable(h, p), []);
+  hold.release();
+  await until(async () => (await progress(cookie)) === null);
+  assert.ok(usable(h, p).length > 0);
+});
+
+test('password sign-in of a local account bound to GitHub checks it again without waiting for it', async t => {
+  const f = await identityFixture(t), { h, admin, state } = f, password = testPassword();
   const user = (await admin('/api/users', 'POST', { username: 'bound-local', password })).value.user;
   const local = h.client(); assert.equal((await local('/api/auth/login', 'POST', { username: 'bound-local', password })).status, 200);
   assert.equal((await f.login('bind', local.cookie().slice('bot_session='.length))).result.principal_id, user.id);
   lapse(h, user.id); assert.deepEqual(usable(h, user.id), []);
-  const reads = installationReads(f), again = h.client();
+  const reads = installationReads(f), again = h.client(), hold = holdCheck(state);
   assert.equal((await again('/api/auth/login', 'POST', { username: 'bound-local', password })).status, 200);
+  await hold.arrived;
+  const cookie = { base: h.admin, value: again.cookie() };
+  assert.deepEqual(await progress(cookie), { checked: 0, total: 1 });
+  hold.release();
+  await until(async () => (await progress(cookie)) === null);
   assert.ok(installationReads(f) > reads);
   assert.ok(identity(h, user.id).verified_at > Date.now() - 60_000);
   assert.ok(usable(h, user.id).length > 0);
+  // Without a check running, the console is told there is nothing to follow.
+  assert.equal(await progress({ base: h.admin, value: f.admin.cookie() }), null);
 });
 
 test('a write whose proof lapsed checks once, concurrent writes share that check, and a failing GitHub is not asked again at once', async t => {

@@ -110,7 +110,9 @@ async function applyGithubReturn(current) {
   history.replaceState(null, '', url.pathname + url.search + url.hash);
   // A Feishu channel-binding return must not wait on an identity refresh or redirect back to GitHub.
   if (/^#\/identity\/feishu/.test(url.hash || location.hash)) return false;
-  if (!me || setup === 'waiting_identity') {
+  // #708: returning from GitHub sign-in, the check that sign-in started is already running on the server; the page waits for
+  // it below instead of starting a second one. An App installation still asks for a check of its own.
+  if (!me || setup === 'waiting_identity' || setup === null) {
     identityRefreshNotice = githubReturnMessage(setup, auth);
     identityRefreshNoticeIsError = false;
     return false;
@@ -209,6 +211,12 @@ async function renderIdentity() {
   if (feishuBindings) {
     $('count').textContent = '';
     await renderFeishuBindingsPage(panel, current);
+    return;
+  }
+  // #708: grants are about to change while a GitHub permission check runs; the page is drawn once it ends (verification.js).
+  if (me && me.github_verification) {
+    $('count').textContent = '';
+    panel.replaceChildren(consoleState(t('verification.title'), t('verification.identity'), { tone: 'loading' }));
     return;
   }
   let data;

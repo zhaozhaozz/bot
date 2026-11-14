@@ -191,17 +191,18 @@ test('legacy App login stays active until an administrator replaces it; saved lo
   assert.equal(saved.value.github_login.application_type, 'oauth_app'); assert.equal(saved.value.github_login.account_id, null);
 });
 
-test('disabling login during callback permission verification cannot issue a new session', async t => {
+test('disabling login while the sign-in permission check runs leaves no session or derived authority behind', async t => {
   const f = await identityFixture(t, { wizardOnly: true }), { h, admin } = f;
   await admin(path, 'PUT', { enabled: true, client_id: 'fixture-client', client_secret: 'fixture-secret' });
   const identity = f.githubLogin.identity, begun = new URL(identity.begin('browser', 'login').url);
   const response = await fetch(begun, { redirect: 'manual' }), callback = new URL(response.headers.get('location'));
   let entered, release; const waiting = new Promise(r => { entered = r; }), gate = new Promise(r => { release = r; });
   f.state.apiGate = async path => { if (path === '/app/installations/77') { entered(); await gate; } };
-  const completing = identity.callback('browser', callback.searchParams.get('state'), callback.searchParams.get('code'));
+  // Signing in does not wait for the permission check (#708); the check still in flight cannot restore anything.
+  const completing = await identity.callback('browser', callback.searchParams.get('state'), callback.searchParams.get('code'));
   await waiting;
   assert.equal((await admin(path, 'PUT', { enabled: false })).status, 200);
-  release(); await assert.rejects(completing, /github_login_configuration_changed/);
+  release(); await completing.verification;
   const identityRow = h.store.get('SELECT * FROM external_identities');
   assert.equal(identityRow.credentials, null);
   assert.equal(h.store.get('SELECT count(*) n FROM sessions WHERE identity_id=?', identityRow.id).n, 0);
@@ -213,7 +214,7 @@ test('disabling login ends GitHub sessions and derived authority while retaining
   await admin(path, 'PUT', { enabled: true, client_id: 'fixture-client', client_secret: 'fixture-secret' });
   const identity = f.githubLogin.identity, begun = new URL(identity.begin('browser', 'login').url);
   const response = await fetch(begun, { redirect: 'manual' }), callback = new URL(response.headers.get('location'));
-  const result = await identity.callback('browser', callback.searchParams.get('state'), callback.searchParams.get('code'));
+  const result = await identity.callback('browser', callback.searchParams.get('state'), callback.searchParams.get('code')); await result.verification;
   const externalSession = session(h.store, result.principal_id, result.identity_id), localSession = session(h.store, result.principal_id);
   assert.equal((await admin('/api/project-admin-assignments', 'PUT', { user_id: result.principal_id, repository_ids: ['101'] })).status, 200);
   const before = resolveActor(h.store, externalSession.token);
@@ -237,7 +238,8 @@ test('migrating legacy App login clears old tokens and GitHub sessions but prese
   const complete = async () => {
     const identity = f.githubLogin.identity, begun = new URL(identity.begin('migration-browser', 'login').url);
     const response = await fetch(begun, { redirect: 'manual' }), callback = new URL(response.headers.get('location'));
-    return identity.callback('migration-browser', callback.searchParams.get('state'), callback.searchParams.get('code'));
+    const result = await identity.callback('migration-browser', callback.searchParams.get('state'), callback.searchParams.get('code'));
+    await result.verification; return result;
   };
   const first = await complete(), external = session(h.store, first.principal_id, first.identity_id), local = session(h.store, first.principal_id);
   authorize(resolveActor(h.store, external.token), 'config.write', { project_id: '101' });

@@ -40,6 +40,7 @@ async function start() {
   // The shell was blank until both requests above answered; the boot line covers that gap and leaves with them.
   $('boot').hidden = true;
   $('access').hidden = !!me; $('workspace').hidden = !me; $('identity').hidden = !me; $('tabs').hidden = !me;
+  if (typeof watchGithubVerification === 'function') watchGithubVerification();
   if (!me) document.body.classList.remove('board-mode');
   $('access-title').textContent = setup ? t('setup.title') : t('login.title');
   $('access-description').textContent = setup ? t('setup.description') : t('login.description');

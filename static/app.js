@@ -7,6 +7,7 @@
  * app/states.js
  * app/delivery.js
  * app/boot.js
+ * app/verification.js
  * app/route.js
  * app/list.js
  * app/render.js
