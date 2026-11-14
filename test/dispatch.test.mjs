@@ -55,6 +55,9 @@ test('event dispatch reads the editable Manager role and honors permission revoc
   await f.run();
   assert.ok(f.requests[0].messages[0].content.includes('My complete event and task coordination instructions.'));
   assert.ok(!f.requests[0].messages[0].content.includes('Coordinate only.'));
+  // #710: a replaced persona keeps the base rule, and the dispatch tools text limits writes on other people's objects.
+  assert.ok(f.requests[0].messages[0].content.includes('Unless its author explicitly asked for it in that issue or pull request'));
+  assert.ok(f.requests[0].messages[0].content.includes('write only comments and triage labels'));
   assert.equal(events(f.h)[0].state, 'pending');
   assert.equal(JSON.parse(events(f.h)[0].error).code, 'task_delegation_forbidden');
   assert.equal(tasks(f.h).length, 0);

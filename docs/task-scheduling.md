@@ -27,6 +27,20 @@ QA observations alone do not create work. For a `pass_with_issues` result, a sep
 - `supplement`: append this discovery to an existing unresolved task; do not create another execution.
 - `related`: create independent work and link the related task.
 - `recurrence`: create new work linked to an earlier fix, without rewriting its acceptance.
+- `none`: keep the residual as a suggestion in the acceptance record; no task is created or supplemented.
+
+### Other people's issues and pull requests
+
+Each item also says what the work would change and need. `target` is the existing issue or pull request of the repository it would change, `{"type":"none"}` when it changes none; omitted, it is the issue or pull request a review or reply task worked on, and none for other tasks. `author_request` quotes that object's author asking for the change, `maintainer_acceptance` says where a maintainer accepted the finding, and `needs` lists what the executor must be able to do (`edit_files`, `run_commands`, `github_write`). The planning input gives the Manager `reviewed_object` (its author, whether the bot opened it, merged or closed) and the executor's abilities, so it can keep such residuals as suggestions itself.
+
+When the acceptance is recorded, the control plane refuses a follow-up it would otherwise create or supplement, records `followup_refused` on the source task with every reason, and leaves the residual in the acceptance record:
+
+- `followup_others_work`: someone else opened the target (it is not a pull request in `bot_pull_requests` or an issue the bot filed for an Actions failure), and `author_request` is not found, at least 12 characters long, in that author's own words the control plane received: the title and body, and the comments or reviews that started tasks on it.
+- `followup_object_closed`: the target is merged or closed, as the webhook recorded it (`review_objects`) or the stored copy says.
+- `followup_maintainer_accepted`: the plan carries a maintainer's acceptance. A claim that only refuses work is taken as given; the author's request, which allows work, is checked.
+- `followup_executor_unauthorized`: the executor, the `dev` role running the ordinary request (`task.request`) a follow-up becomes or the unfinished task it supplements, cannot do something in `needs`. Editing files needs that work type's `code` write and the role's file writes, commands need the role's commands, and GitHub writes need the role's write on the target's resource.
+
+The framework-default plan used when the Manager is unavailable goes through the same check, so a classification outage cannot start work on someone else's issue or pull request either. This applies the base rule every role receives: the bot does not change an issue or pull request someone else opened unless its author asked for it there.
 
 Titles alone never cause automatic merging. The plan is bound to parent task, candidate and contract revision, with the actual Manager run reference. Replaying a completed acceptance does not create another child. Different sources, candidate versions, impact facts, evidence, Manager reasons and an optional same-repository GitHub Issue URL remain in `task_relations`; `source_task_id` is not the only provenance edge.
 
@@ -44,7 +58,7 @@ If Manager infrastructure/permissions are unavailable, the original QA result is
 
 ## Verification
 
-Automated tests cover priority order, same-level FIFO, unchanged-priority stability, re-entry/ready dependencies, durable reopen, competing real Node processes, QA urgency injection being ignored, explicit Manager decisions, two-source supplementation, recurrence, active-work coordination, and scope protection. A Native tool-loop fixture covers QA facts → Manager plan → Coordinator advice → acknowledgement without accepting the child automatically. Browser coverage checks priority editing, persistence/audit and mobile width.
+`test/followup-ownership.test.mjs` replays the PR #416 case (a contributor's fork branch that maintainers may not edit) and covers the author's request, a bot pull request, merged, closed and accepted targets, missing executor permissions and `none`. Automated tests cover priority order, same-level FIFO, unchanged-priority stability, re-entry/ready dependencies, durable reopen, competing real Node processes, QA urgency injection being ignored, explicit Manager decisions, two-source supplementation, recurrence, active-work coordination, and scope protection. A Native tool-loop fixture covers QA facts → Manager plan → Coordinator advice → acknowledgement without accepting the child automatically. Browser coverage checks priority editing, persistence/audit and mobile width.
 
 An isolated real Native/DeepSeek replay uses the actual OpenToday residual facts from task `4f2eed3b…`: three documentation discrepancies and their existing derived tasks. The Manager classified all three as P3, chose to supplement the three existing tasks, created no duplicates, and P2 `final-integration` claimed the next slot. This validates Manager decision-making and queue application on historical facts, not a new product implementation or fresh product QA. The experiment's original database/repository were not modified.
 
