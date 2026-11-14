@@ -20,7 +20,7 @@ function fixture(t,path=':memory:'){
 function release(s,id,status='completed'){s.run('DELETE FROM task_claims WHERE task_id=?',id);s.run('UPDATE tasks SET status=? WHERE id=?',status,id);}
 function stage(f,id){f.records.contract(id,{goal:'Deliver bounded verified work',scope:['docs'],criteria:['Actual evidence'],endpoint:'artifact',source:{},completeness:'explicit'});return f.records.submit(id,[{kind:'report',reference:'report.md',version:'tree-'+id}],[],{summary:'Observed evidence'});}
 function plan(f,id,candidate,items){f.s.run('INSERT INTO task_followup_plans VALUES(?,?,?,?,?,?)',id,candidate.id,candidate.revision,JSON.stringify(validateFollowupPlan(f.s,f.s.get('SELECT * FROM tasks WHERE id=?',id),candidate,items.map(i=>({...residual,key:i.key})),{items})),'manager:actual-decision','now');}
-const decision=(key,priority='P3',action='new',task_id)=>({key,priority,action,...(task_id?{task_id}:{}),reason:'Only optional documentation; no core flow or delivery blocked',evidence_refs:[residual.evidence]});
+const decision=(key,priority='P3',action='new',task_id)=>({key,priority,action,needs:[],...(task_id?{task_id}:{}),reason:'Only optional documentation; no core flow or delivery blocked',evidence_refs:[residual.evidence]});
 
 test('P0-P3, FIFO and nonpreemption use persistent tickets and not task IDs or creation timestamps',t=>{
  const f=fixture(t);f.create('z-first','P2');f.create('a-second','P2');f.create('low','P3');f.create('critical','P0');

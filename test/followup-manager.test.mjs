@@ -20,9 +20,14 @@ async function fixture(t,respond){
 }
 test('real Native Manager tool loop consumes objective QA impact, searches existing work and ranks/links without changing QA',async t=>{
  const f=await fixture(t,(body,n)=>{
- if(n===1){assert.ok(body.messages[0].content.includes('P0:'));assert.ok(body.messages[0].content.includes('not QA'));return call('search_project_tasks',{query:'existing'});}
+ if(n===1){assert.ok(body.messages[0].content.includes('P0:'));assert.ok(body.messages[0].content.includes('not QA'));
+ // Role runs keep the role's system prompt, so the planning rules (#710) travel in the prompt.
+ const input=JSON.parse(body.messages[1].content);assert.match(input.instructions,/Choose none to keep a residual as a suggestion/);assert.match(input.instructions,/without its author's quoted request/);
+ assert.equal(input.reviewed_object,null);assert.deepEqual(input.executor,{role:'dev',can:{edit_files:false,run_commands:true,github_write:false}});
+ assert.ok(body.tools.find(t=>t.function.name==='submit_followup_plan').function.parameters.properties.items.items.required.includes('needs'));
+ return call('search_project_tasks',{query:'existing'});}
  assert.ok(body.messages.at(-1).content.includes('existing'));assert.ok(!body.messages.at(-1).content.includes('task_record_not_found'));
- return call('submit_followup_plan',{items:[{key:residual.key,priority:'P3',reason:'Only stale documentation; package.json is a workaround, no delivery blocked',evidence_refs:[residual.evidence],action:'supplement',task_id:'existing'}]});});
+ return call('submit_followup_plan',{items:[{key:residual.key,priority:'P3',reason:'Only stale documentation; package.json is a workaround, no delivery blocked',evidence_refs:[residual.evidence],action:'supplement',task_id:'existing',needs:[]}]});});
  const original=JSON.stringify(verdict);await assessFollowups(f.s,f.task,f.candidate,verdict,f.workspace,async()=>{},new Redactor());assert.equal(JSON.stringify(verdict),original);
  const row=f.s.get('SELECT * FROM task_followup_plans');assert.ok(row,JSON.stringify(f.s.all("SELECT type,data FROM task_history WHERE type='followup_plan_deferred'")));assert.equal(JSON.parse(row.plan)[0].priority,'P3');assert.equal(f.requests.length,2);
  const accepted=f.records.decide('parent',f.candidate.id,f.candidate.revision,verdict);assert.deepEqual(accepted.followups,['existing']);assert.equal(accepted.outcome,'pass_with_issues');assert.equal(f.s.get('SELECT count(*) n FROM tasks').n,2);
@@ -39,7 +44,7 @@ test('QA impact → Manager related-work plan → queued Coordinator → advice/
    const user=body.messages.find(m=>m.role==='user'&&m.content.includes('coordination_id'));const pack=JSON.parse(user.content);
    return call('submit_coordination',{summary:'Existing writer keeps its candidate; new task checks only the independent docs discrepancy',outcome:'notices',notices:[{task_id:pack.request.task_ids[0],message:'Read existing evidence and handle only the distinct documentation claim, then obtain fresh QA.',action:'review'},{task_id:'existing',message:'Continue owned implementation; linked docs work is independent.',action:'review'}]});
   }
-  return call('submit_followup_plan',{items:[{key:residual.key,priority:'P3',reason:'Distinct docs defect on a shared surface, core delivery is complete',evidence_refs:[residual.evidence],action:'related',task_id:'existing'}]});
+  return call('submit_followup_plan',{items:[{key:residual.key,priority:'P3',reason:'Distinct docs defect on a shared surface, core delivery is complete',evidence_refs:[residual.evidence],action:'related',task_id:'existing',needs:[]}]});
  });
  f.s.run("UPDATE tasks SET status='running' WHERE id='existing'");await assessFollowups(f.s,f.task,f.candidate,verdict,f.workspace,async()=>{},new Redactor());
  const accepted=f.records.decide('parent',f.candidate.id,f.candidate.revision,verdict),child=accepted.followups[0];assert.equal(f.s.get('SELECT status FROM tasks WHERE id=?',child).status,'waiting_coordination');
@@ -51,7 +56,7 @@ test('QA impact → Manager related-work plan → queued Coordinator → advice/
 
 test('Pi Manager planning uses the same post-QA decision protocol through the control mailbox',async t=>{
  const {fakeRunner}=await import('./pi-mailbox.mjs'),{Workspace}=await import('../dist/agent/workspace.js');
- const f=await fixture(t,()=>call('submit_followup_plan',{items:[{key:residual.key,priority:'P3',reason:'Only optional docs, no core delivery blocked',evidence_refs:[residual.evidence],action:'new'}]}));
+ const f=await fixture(t,()=>call('submit_followup_plan',{items:[{key:residual.key,priority:'P3',reason:'Only optional docs, no core delivery blocked',evidence_refs:[residual.evidence],action:'new',needs:[]}]}));
  f.s.run("UPDATE settings SET value=? WHERE key='roles:r'",JSON.stringify({enabled:true,harnesses:{manager:'pi'}}));f.task.generation=1;
  const runner=fakeRunner(),workspace=new Workspace(f.s,runner.manager,f.task,new Redactor(),async()=>{},()=>{});
  await assessFollowups(f.s,f.task,f.candidate,verdict,workspace,async()=>{},new Redactor());

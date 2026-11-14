@@ -1,7 +1,7 @@
 import {traceClean} from './trace.js';
 import {childTaskContext} from './children.js';
 import {captureTaskConfiguration} from './configuration.js';
-import {followupDecision,followupTarget,recordFollowupRelation,coordinateFollowup,completedFollowupTarget} from './followups.js';
+import {followupDecision,followupTarget,followupRefusal,recordFollowupRelation,coordinateFollowup,completedFollowupTarget} from './followups.js';
 import {setTaskPriority,taskRelations} from './priority.js';
 import { reconcileAssignments, assertStageAcceptance } from '../roles/schedule.js';
 import {requestCoordination,validCoordination,coordinationContext,coordinationVersion,assertCoordinationCurrent,acknowledgeCoordination,type CoordinationRequest} from './coordination.js';
@@ -122,7 +122,7 @@ export class TaskRecords {
       const offset=args?.offset??0,limit=args?.limit??10;
       if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>20)return {error:'invalid_history_page',received:{offset,limit},range:{offset_min:0,limit_min:1,limit_max:20},discovery:{tool:'read_task_history',arguments:{offset:0,limit:10}}};
       const clip=(value:any):any=>typeof value==='string'&&value.length>12000?value.slice(0,12000)+' [truncated; original retained in task_history]':Array.isArray(value)?value.map(clip):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,clip(v)])):value;
-      const filter="task_id=? AND type IN ('long_execution_report','long_execution_decision','long_execution_notification_fault','child_task_created','parent_task_linked','children_waiting','children_resumed','retry_failure','retry_report','retry_decision','retry_resolved','retry_evidence','retry_notification_fault','priority_changed','priority_assessed','priority_defaulted','queue_entered','queue_claimed','followup_plan','followup_plan_deferred','followup_linked','followup_coordination','task_related','coordination_requested','coordination_notice','coordination_acknowledged','coordination_result','coordination_fault','scope_difference','checkpoint','artifact_checkpoint','execution_evidence','acceptance','acceptance_fault','inherited_artifact','memory_search','memory_read','memory_fault','role_handoff','role_result','role_candidate','role_record_read','delivery_nominated','role_assignment_fault','role_result_normalized','stage_plan','stage_result','acceptance_evaluated','repository_evolved','publication','publication_state','merge_requested','merge_version_context','merge_queue','version_reference','integration_result','integration_requested','integration_decision','supplemental_instruction','manager_recovery_queued')";
+      const filter="task_id=? AND type IN ('long_execution_report','long_execution_decision','long_execution_notification_fault','child_task_created','parent_task_linked','children_waiting','children_resumed','retry_failure','retry_report','retry_decision','retry_resolved','retry_evidence','retry_notification_fault','priority_changed','priority_assessed','priority_defaulted','queue_entered','queue_claimed','followup_plan','followup_plan_deferred','followup_refused','followup_linked','followup_coordination','task_related','coordination_requested','coordination_notice','coordination_acknowledged','coordination_result','coordination_fault','scope_difference','checkpoint','artifact_checkpoint','execution_evidence','acceptance','acceptance_fault','inherited_artifact','memory_search','memory_read','memory_fault','role_handoff','role_result','role_candidate','role_record_read','delivery_nominated','role_assignment_fault','role_result_normalized','stage_plan','stage_result','acceptance_evaluated','repository_evolved','publication','publication_state','merge_requested','merge_version_context','merge_queue','version_reference','integration_result','integration_requested','integration_decision','supplemental_instruction','manager_recovery_queued')";
       const total=Number(this.store.get('SELECT count(*) n FROM task_history WHERE '+filter,id)!.n);
       const rows=this.store.all('SELECT id,type,data,created_at FROM task_history WHERE '+filter+' ORDER BY id DESC LIMIT ? OFFSET ?',id,limit,offset).reverse();
       return {total,offset,next_offset:offset+rows.length<total?offset+rows.length:null,observations:rows.map(row=>({...row,data:clip(taskControllerReads(this.store,id,access)?traceClean(JSON.parse(row.data)):visibleMemorySnapshot(this.store,this.store.get('SELECT repository_id FROM tasks WHERE id=?',id)!.repository_id,JSON.parse(row.data),access))}))};
@@ -179,9 +179,14 @@ export class TaskRecords {
       const followups:string[]=[];
       const followupPlan=this.store.get('SELECT manager_ref FROM task_followup_plans WHERE task_id=? AND candidate_id=? AND revision=?',id,candidateId,revision);
       for(const residual of followupPlan?verdict.residuals:[]){
-        const decision=followupDecision(this.store,task,current.candidate!,residual),target=followupTarget(this.store,task,current.candidate!,residual,decision);
+        const decision=followupDecision(this.store,task,current.candidate!,residual);
+        // A residual the Manager kept as a suggestion, or one the control plane refuses, stays in the acceptance record only.
+        if(decision.action==='none')continue;
+        const target=followupTarget(this.store,task,current.candidate!,residual,decision),supplement=target&&decision.action==='supplement'&&!completedFollowupTarget(target);
+        const refused=followupRefusal(this.store,task,decision,supplement?target:undefined);
+        if(refused.length){this.history(id,'followup_refused',{candidate_id:candidateId,residual_key:residual.key,decision,reasons:refused,actor:'framework'});continue;}
         let child:string;
-        if(target&&decision.action==='supplement'&&!completedFollowupTarget(target)){
+        if(supplement){
           child=target.id;
           if(target.status!=='running')setTaskPriority(this.store,child,decision.priority,decision.reason,'role:manager');
           coordinateFollowup(this.store,target,target,task,current.candidate!,residual,decision);
