@@ -29,6 +29,8 @@ export class GitHubIdentity implements InstallationIdentity {
   private refreshing = new Map<string, Promise<void>>();
   // When each principal's latest check ended, for the pause after a failed one.
   private finished = new Map<string, number>();
+  // How far the check in flight has come, for the console's progress line.
+  private progress = new Map<string, { checked: number; total: number }>();
   private tokens = new Map<string, Promise<string>>();
   /** Until when GitHub asked this deployment to stop sending, as reported by the latest rate-limited response; the background refresh waits for it. */
   rateLimitedUntil = 0;
@@ -83,7 +85,11 @@ export class GitHubIdentity implements InstallationIdentity {
       this.store.secrets.seal(token, `identity:${id}`), Number.isFinite(Number(token.expires_in)) ? now + Number(token.expires_in) * 1000 : null,
       Number.isFinite(Number(token.refresh_token_expires_in)) ? now + Number(token.refresh_token_expires_in) * 1000 : null, now, id);
   }
-  async callback(browser: string, state: string, code: string, sessionRef = ''): Promise<{ principal_id: string; identity_id: string; setup_state: string | null }> {
+  /**
+   * Signing in does not wait for the permission check (#708): the session opens at once, and `verification` settles when the
+   * check started here ends (it never rejects). The console shows its progress through `verification()`.
+   */
+  async callback(browser: string, state: string, code: string, sessionRef = ''): Promise<{ principal_id: string; identity_id: string; setup_state: string | null; verification: Promise<void> }> {
     const row = this.store.transaction(() => {
       const row = this.store.get('SELECT * FROM github_oauth_states WHERE state_hash=?', digest(state));
       if (!row || row.browser_hash !== digest(browser) || row.expires_at <= Date.now() || row.consumed_at) return fail(400, 'invalid_oauth_state');
@@ -114,7 +120,7 @@ export class GitHubIdentity implements InstallationIdentity {
       this.saveToken(id, token); this.store.audit(principal, 'github.authorized', id);
       return { principal_id: principal, identity_id: id, setup_state: row.setup_state as string | null };
     });
-    await this.refresh(result.principal_id); this.assertConfiguration(); return result;
+    return { ...result, verification: this.refresh(result.principal_id).catch(() => {}) };
   }
   private token(identity: Row): Promise<string> {
     const existing = this.tokens.get(identity.id); if (existing) return existing;
@@ -139,12 +145,19 @@ export class GitHubIdentity implements InstallationIdentity {
     const promise = (async () => {
       if (previous) await previous.catch(() => {});
       for (let attempt = 0; attempt < 5; attempt++) if (await this.verifyPermissions(principal) === 'done') return;
-    })().finally(() => { this.finished.set(principal, Date.now()); if (this.refreshing.get(principal) === promise) this.refreshing.delete(principal); });
+    })().finally(() => {
+      this.finished.set(principal, Date.now());
+      if (this.refreshing.get(principal) === promise) { this.refreshing.delete(principal); this.progress.delete(principal); }
+    });
     this.refreshing.set(principal, promise); return promise;
   }
+  /** While a check of the principal's permissions runs: how many of the deployment's installations it has read so far (total 0 until it knows). */
+  verification(principal: string): { checked: number; total: number } | null {
+    return this.refreshing.has(principal) ? { ...(this.progress.get(principal) ?? { checked: 0, total: 0 }) } : null;
+  }
   /**
-   * The background refresh and a password login (#708): join a check already in flight, else start one. An identity that a
-   * failed check left pending is tried again, as the 「重新验证」 button would.
+   * The background refresh, a password sign-in and a write whose proof lapsed (#708): join a check already in flight, else
+   * start one. An identity that a failed check left pending is tried again, as the 「重新验证」 button would.
    */
   renew(principal: string): Promise<void> {
     const inflight = this.refreshing.get(principal); if (inflight) return inflight;
@@ -183,7 +196,10 @@ export class GitHubIdentity implements InstallationIdentity {
       const token = await this.token(identity), current = await this.api(token, '/user');
       if (numericId(current.id) !== identity.external_actor || typeof current.login !== 'string' || !current.login) return fail(403, 'github_identity_mismatch');
       const permissions = new GitHubPermissions(this.store, this.config.apiUrl, this.limited);
-      for (const snapshot of this.store.all("SELECT * FROM github_installations WHERE github_host='github.com'")) {
+      const snapshots = this.store.all("SELECT * FROM github_installations WHERE github_host='github.com'");
+      const progress = { checked: 0, total: snapshots.length }; this.progress.set(principal, progress);
+      for (const [index, snapshot] of snapshots.entries()) {
+        progress.checked = index;
         const ref = snapshot.ref;
         // Confirmed deleted or suspended: nothing to prove, and their grants are revoked below.
         if (snapshot.status === 'deleted' || snapshot.status === 'suspended') continue;
@@ -206,6 +222,7 @@ export class GitHubIdentity implements InstallationIdentity {
             desired.push({ id: `github:${principal}:${ref}:${id}`, tenant, project: id, role: 'project_admin', installation: snapshot, evidence });
         } catch (error) { uncertain.set(ref, errorCode(error)); if (errorCode(error) === 'github_rate_limited') limited.add(ref); }
       }
+      progress.checked = snapshots.length;
       this.store.transaction(() => {
         this.assertConfiguration();
         if (revision(this.store, principal) !== startRevision || !this.store.get("SELECT 1 FROM external_identities WHERE id=? AND status='active'", identity.id)) return fail(409, 'authorization_changed');

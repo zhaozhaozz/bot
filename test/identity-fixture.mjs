@@ -61,7 +61,9 @@ export async function identityFixture(t, options = {}) {
   async function login(mode = 'login', session = '', browser = 'test-browser') {
     const begun = identity.begin(browser, mode, session), url = new URL(begun.url);
     const authorized = await fetch(begun.url, { redirect: 'manual' }), code = new URL(authorized.headers.get('location')).searchParams.get('code');
-    return { result: await identity.callback(browser, url.searchParams.get('state'), code, session), url, code, browser };
+    // Signing in does not wait for the permission check (#708); tests that use the grants wait for it here.
+    const result = await identity.callback(browser, url.searchParams.get('state'), code, session); await result.verification;
+    return { result, url, code, browser };
   }
   return { h, admin, password, state, a, get identity() { return identity; }, get githubLogin() { return githubLogin; }, base, snapshot, login, close: async () => { await h.stop(); await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); } };
 }

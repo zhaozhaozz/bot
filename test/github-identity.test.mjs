@@ -21,7 +21,7 @@ test('OAuth uses S256, browser-bound single-use state and stable numeric identit
   assert.equal(url.searchParams.get('scope'), '');
   await assert.rejects(identity.callback('browser-b', url.searchParams.get('state'), 'code'), /invalid_oauth_state/);
   const authorized = await fetch(begun.url, { redirect: 'manual' }), callback = new URL(authorized.headers.get('location'));
-  const result = await identity.callback('browser-a', callback.searchParams.get('state'), callback.searchParams.get('code'));
+  const result = await identity.callback('browser-a', callback.searchParams.get('state'), callback.searchParams.get('code')); await result.verification;
   assert.notEqual(result.principal_id, (await f.admin('/api/auth/me')).value.id);
   assert.equal(h.store.get('SELECT role FROM users WHERE id=?', result.principal_id).role, 'project_admin');
   await assert.rejects(identity.callback('browser-a', callback.searchParams.get('state'), callback.searchParams.get('code')), /invalid_oauth_state/);

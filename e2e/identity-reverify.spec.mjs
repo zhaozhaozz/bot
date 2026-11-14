@@ -173,7 +173,7 @@ test('重新验证 GitHub 权限：请求超时后显示错误并恢复按钮', 
   } finally { await f.close(); }
 });
 
-test('从 GitHub 安装或授权返回后自动刷新并显示结果，身份页没有重复的刷新按钮', async ({ page }) => {
+test('从 GitHub 安装返回后自动刷新、从 GitHub 登录返回后等登录时的核验并显示结果，身份页没有重复的刷新按钮', async ({ page }) => {
   const f = await identityFixture();
   let refreshed = 0;
   try {
@@ -202,7 +202,8 @@ test('从 GitHub 安装或授权返回后自动刷新并显示结果，身份页
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(f.h.admin + '/?github_auth=1#/identity');
     await expect(page.locator('#identity-panel').getByRole('status')).toHaveText('已从 GitHub 授权返回，身份与授权已刷新。');
-    expect(refreshed).toBeGreaterThan(beforeAuth);
+    // #708: signing in already started the check on the server; the page waits for it rather than starting another.
+    expect(refreshed).toBe(beforeAuth);
     await page.screenshot({ path: '.tmp/ui-516/auth-return-1440.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
@@ -230,7 +231,8 @@ test('自动刷新在重新授权后绑定失败时显示错误，不会停在�
     await page.goto(f.h.admin);
     await page.getByRole('link', { name: '使用 GitHub 登录' }).click();
     await expect(page.getByRole('heading', { name: '我的 GitHub 连接' })).toBeVisible();
-    await page.goto(f.h.admin + '/?github_auth=1#/identity');
+    // An App installation return asks for a check of its own (#708: a sign-in return no longer does).
+    await page.goto(f.h.admin + '/?github_setup=ready#/identity');
     await expect(page.getByRole('heading', { name: '正在刷新身份与授权' })).toHaveCount(0);
     await expect(page.locator('#identity-panel')).toContainText('连接 GitHub 失败：授权请求没有完成');
     await expect(page.getByRole('heading', { name: '我的 GitHub 连接' })).toBeVisible();

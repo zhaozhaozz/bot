@@ -81,6 +81,8 @@ test('dual-end binding supports optional browser-bound GitHub login; forwarding,
   const forwarded = await fetch(callback, { redirect: 'manual' }); assert.match(forwarded.headers.get('location'), /invalid_oauth_state/);
   const verified = await fetch(callback, { redirect: 'manual', headers: { Cookie: browserCookie } }); assert.equal(verified.headers.get('location'), '/?github_auth=1#/identity/feishu');
   const cookie = verified.headers.getSetCookie().find(s => s.startsWith('bot_session=')).split(';')[0];
+  // Signing in does not wait for the GitHub permission check (#708); count grants once it has ended, as the console waits.
+  while ((await (await fetch(h.admin + '/api/auth/me', { headers: { Cookie: cookie } })).json()).github_verification) await new Promise(resolve => setTimeout(resolve, 25));
   const pending = await (await fetch(h.admin + '/api/channels/bindings', { headers: { Cookie: cookie } })).json();
   assert.equal(pending.pending[0].open_id, 'ou_alice');
   assert.equal(pending.pending[0].account.id, h.store.get('SELECT principal_id FROM channel_bind_requests').principal_id);

@@ -290,13 +290,15 @@ export function createControlPlane(options: Options, security: { trustedProxies?
       // A concurrent administrator may have disabled this user during hashing.
       if (!store.get('SELECT id FROM users WHERE id=? AND active=1', row!.id)) fail(401, 'invalid_login');
       const credentials = store.transaction(() => session(store, row!.id)); loginAttempts.delete(key);
-      // Signing in to an account bound to GitHub checks its GitHub permissions again (#708). A failed check only leaves its
-      // derived grants pending; super administrators and accounts with explicit delegation are never checked.
-      try { await githubIdentity?.renew(row!.id); } catch { /* the session stands; the background refresh tries again */ }
+      // Signing in to an account bound to GitHub checks its GitHub permissions again (#708), without making the sign-in wait:
+      // the console opens at once and shows the check's progress. A failed check only leaves its derived grants pending;
+      // super administrators and accounts with explicit delegation are never checked.
+      void Promise.resolve().then(() => githubIdentity?.renew(row!.id)).catch(() => {});
       res.setHeader('Set-Cookie', cookie(req, credentials.token)); respond(res, 200, { ok: true, csrf_token: credentials.csrf }); return;
     }
     if (!user) return fail(401, 'login_required');
-    if (path === '/api/auth/me' && method === 'GET') { respond(res, 200, publicActor(user)); return; }
+    // github_verification: the progress of a GitHub permission check running for this account (at sign-in, say), else null.
+    if (path === '/api/auth/me' && method === 'GET') { respond(res, 200, { ...publicActor(user), github_verification: githubIdentity?.verification(user.id) ?? null }); return; }
     if (path === '/api/identity/github/bind' && method === 'POST') {
       fields(input, ['setup_state']);
       if (!githubIdentity) return fail(503, 'github_login_not_configured');

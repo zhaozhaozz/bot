@@ -171,7 +171,10 @@ async function render(quiet = false) {
     $('rows').append(consoleState('等待启动的仓库暂时无法读取', pendingRepositoriesError.message || '请稍后重试。', { tone: 'error', retry: () => start().catch(error) }));
   }
   if (tab === 'events' && !rows.length) $('rows').replaceChildren(eventsEmptyState(params));
-  if (tab === 'projects' && !installedView && !repositories.length && !rows.length && !pendingRepositories.length && !pendingRepositoriesError) {
+  // #708: while the GitHub permission check that follows signing in runs, an empty list means "not known yet", not "none".
+  if (tab === 'projects' && !installedView && !hiddenView && !repositories.length && !rows.length && me.github_verification) {
+    $('rows').replaceChildren(consoleState(t('verification.title'), t('verification.projects'), { tone: 'loading' }));
+  } else if (tab === 'projects' && !installedView && !repositories.length && !rows.length && !pendingRepositories.length && !pendingRepositoriesError) {
     const empty = consoleState('已登录，尚无可管理的项目', '可以先查看身份与权限；安装待同步或权限待核验时，按身份页提示重新验证，或联系管理员分配项目。', { retry: () => start().catch(error) });
     empty.append(consoleLink('#/identity', '查看身份与权限')); $('rows').replaceChildren(empty);
   } else if (tab === 'projects' && !rows.length && (hiddenView || installedView)) {
